@@ -64,3 +64,23 @@ class MLP(nn.Module):
         
         return x
     
+# Transformer Block
+class Transformer(nn.Module):
+    def __init__(self, n_embd: int, n_head: int, n_hidden: int):
+        super().__init__()
+        
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.attn = MultiHeadSelfAttention(n_embd, n_head)
+        self.dropout1 = nn.Dropout(0.1)
+        self.ln2 = nn.LayerNorm(n_embd)
+        self.mlp = MLP(n_embd, n_hidden)
+        self.dropout2 = nn.Dropout(0.1)
+        
+    def forward(self, x: torch.Tensor):
+        # first layer normalization and self-attention with residual connection
+        x = x + self.dropout1(self.attn(self.ln1(x)))
+        
+        # second layer normalization and MLP with residual connection
+        x = x + self.dropout2(self.mlp(self.ln2(x)))
+        
+        return x
