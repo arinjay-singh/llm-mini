@@ -84,3 +84,54 @@ class Transformer(nn.Module):
         x = x + self.dropout2(self.mlp(self.ln2(x)))
         
         return x
+    
+    
+# GPT-style model
+class GPTModel(nn.Module):
+    def __init__(self, vocab_size: int, n_embd: int, n_head: int, n_hidden: int, n_layers: int):
+        super().__init__()
+        
+        self.model = nn.ModuleDict(
+            dict(
+                wte=nn.Embedding(vocab_size, n_embd),  # token embeddings
+                wpe=nn.Embedding(1024, n_embd),  # positional embeddings
+                dropout=nn.Dropout(0.1), # dropout layer
+                h=nn.ModuleList([Transformer(n_embd, n_head, n_hidden) for _ in range(n_layers)]),  # stack of transformer blocks
+                ln_f=nn.LayerNorm(n_embd),  # final layer normalization
+                lm_head=nn.Linear(n_embd, vocab_size, bias=False)  # output linear layer for language modeling
+            )
+        )
+        
+        # weight tying with embedding matrix and output projection layer
+        self.model.lm_head.weight = self.model.wte.weight
+        
+    def forward(self, idx: torch.Tensor, targets: torch.Tensor = None):
+        # idx are token indices, targets are optional labels for training
+        
+        B, T = idx.size()  # B: batch size, T: sequence length
+        
+        assert T <= 1024, "Sequence length exceeds maximum of 1024 tokens"
+        
+        # get token and positional embeddings
+        pos = torch.arange(0, T, device=idx.device) # (T,)
+        pos_emb = self.model.wpe(pos)  # (T, n_embd)
+        tok_emb = self.model.wte(idx)  # (B, T, n_embd)
+        
+        # combine token and positional embeddings and apply dropout
+        x = self.model.dropout(tok_emb + pos_emb)  # (B, T, n_embd)
+        
+        # pass through transformer blocks
+        for block in self.model.h:
+            x = block(x)
+            
+        # apply final layer normalization
+        x = self.model.ln_f(x)  # (B, T, n_emb
+        
+        # compute logits
+        logits = self.model.lm_head(x)  # (B, T, vocab_size)
+        
+        if targets is not None:
+            # compute loss if targets are provided
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1)) # logits reshaped to (B*T, vocab_size), targets reshaped to (B*T,)
+            
+        return logits, loss
