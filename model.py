@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from config import GPTConfig
+import inspect
 
 # Multi-head self-attention mechanism
 class MultiHeadSelfAttention(nn.Module):
@@ -58,7 +59,7 @@ class MLP(nn.Module):
         
         self.fc1 = nn.Linear(n_embd, n_hidden)
         self.fc2 = nn.Linear(n_hidden, n_embd)
-        self.act = nn.GELU()
+        self.act = nn.GELU(approximate='tanh')
         
     def forward(self, x: torch.Tensor):
         x = self.fc1(x)
@@ -145,3 +146,37 @@ class GPTModel(nn.Module):
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1)) 
             
         return logits, loss
+    
+    def setup_optimizer(self, weight_decay, learning_rate, device):
+        # start with all candidate parameters (that require gradients)
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        # create optim groups
+        # any parameters that are 2D will be decayed
+        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms do not
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        no_decay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        optim_groups = [
+            {"params": decay_params, "weight_decay": weight_decay},
+            {"params": no_decay_params, "weight_decay": 0.0},
+        ]
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_no_decay_params = sum(p.numel() for p in no_decay_params)
+        print(
+            f"num of decayed parameter tensors: {len(decay_params)}, with {num_decay_params} total parameters"
+        )
+        print(
+            f"num of non-decayed parameter tensors: {len(no_decay_params)}, with {num_no_decay_params} total parameters"
+        )
+        # create AdamW optimizer an duse the fused version if possible
+        fused_available = (
+            "fused" in inspect.signature(torch.optim.AdamW).parameters
+        )  # confirm if fused is available (kernel fusion for AdamW update)
+        use_fused = fused_available and "cuda" in device
+        print(f"using fused AdamW: {use_fused}")
+        optimizer = torch.optim.AdamW(
+            optim_groups, lr=learning_rate, betas=(0.9, 0.95), eps=1e-8, fused=use_fused
+        )
+        return optimizer
+    
+    
