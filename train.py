@@ -42,7 +42,7 @@ if torch.cuda.is_available():
 
 # gradient accumulation (add gradients up over multiple steps, then step optimizer)
 total_batch_size = 524288
-total_steps = 10_000_000_000 // total_batch_size 
+total_steps = 10_000_000_000 // total_batch_size
 B = 64  # micro-batch size (64 on 8 GPUs --> total batch size 512)
 T = 1024  # sequence length
 assert (
@@ -83,28 +83,28 @@ model = GPTModel(GPTConfig(vocab_size=50304))
 model.to(device)
 
 # compile the model for better performance
-model = torch.compile(model) 
+model = torch.compile(model)
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
-    
+
 # always keep a reference to the raw model for saving (unwrapped model)
-raw_model = model.module if ddp else model 
+raw_model = model.module if ddp else model
 
 if master_process:
     total_params = sum(p.numel() for p in raw_model.parameters())
     print(f"Total parameters: {total_params:,}")
-    
+
 # optimizer
 optimizer = raw_model.setup_optimizer(
     weight_decay=0.1, learning_rate=6e-4, device=device
 )
-    
+
 # learning rate scheduler
 lr_scheduler = OneCycleLR(
     optimizer,
     max_lr=6e-4,  # max learning rate
     total_steps=total_steps,
-    pct_start=0.05, # percent of total steps for warmup
+    pct_start=0.05,  # percent of total steps for warmup
     anneal_strategy="cos",  # cosine annealing
     final_div_factor=0.1,  # final learning rate will be 10x smaller than max_lr
 )
@@ -113,25 +113,44 @@ lr_scheduler = OneCycleLR(
 log_dir = "model_checkpoints"
 os.makedirs(log_dir, exist_ok=True)
 
-# wandb logging
-wandb.init(
-    project="gpt2-pretraining",
-    config={
-        "model_size": "medium",
-        "total_steps": total_steps,
-        "batch_size": total_batch_size,
-        "micro_batch_size": B,
-        "sequence_length": T,
-        "learning_rate": 6e-4,  # your max LR
-        "grad_accum_steps": grad_accum_steps,
-        "ddp_world_size": ddp_world_size,
-    }
-)
+if master_process:
+    # wandb logging
+    wandb.init(
+        project="gpt2-pretraining",
+        config={
+            "model_size": "medium",
+            "total_steps": total_steps,
+            "batch_size": total_batch_size,
+            "micro_batch_size": B,
+            "sequence_length": T,
+            "learning_rate": 6e-4,  # your max LR
+            "grad_accum_steps": grad_accum_steps,
+            "ddp_world_size": ddp_world_size,
+        },
+    )
+    total_tokens = 0  # total tokens processed
+    print("Wandb logging initialized")
+    training_start_time = time.time()
+
 
 for step in range(total_steps):
+    if master_process and step % 100 == 0 and step > 0:
+        elapsed_time = time.time() - training_start_time
+        steps_per_hour = step / (elapsed_time / 3600) if elapsed_time > 0 else 0
+        hours_remaining = (
+            (total_steps - step) / steps_per_hour if steps_per_hour > 0 else 0
+        )
+        progress_pct = (step / total_steps) * 100
+        print(
+            f"Step {step}/{total_steps} ({progress_pct:.1f}%), "
+            f"Elapsed time: {elapsed_time:.2f}s, "
+            f"Steps per hour: {steps_per_hour:.2f}, "
+            f"Estimated hours remaining: {hours_remaining:.2f}"
+        )
+
     t0 = time.time()
     last_step = step == total_steps - 1
-    
+
     # evaluate validation loss every 250 steps
     if step % 250 == 0 or last_step:
         model.eval()  # set model to eval mode
@@ -150,7 +169,15 @@ for step in range(total_steps):
             dist.all_reduce(val_loss_accum, op=dist.ReduceOp.AVG)
         if master_process:
             print(f"Validation loss at step {step}: {val_loss_accum.item()}")
-            wandb.log({"val/loss": val_loss_accum.item(), "train/step": step, "val/perplexity": torch.exp(val_loss_accum).item()})
+            wandb.log(
+                {
+                    "val/loss": val_loss_accum.item(),
+                    "train/step": step,
+                    "val/perplexity": torch.exp(
+                        torch.clamp(val_loss_accum, max=10)
+                    ).item(),
+                }
+            )
             if step > 0 and (step % 5000 == 0 or last_step):
                 checkpoint_path = os.path.join(log_dir, f"model_{step:05d}.pt")
                 checkpoint = {
@@ -165,7 +192,8 @@ for step in range(total_steps):
                     "cuda_rng_state": torch.cuda.get_rng_state_all(),
                 }
                 torch.save(checkpoint, checkpoint_path)
-                
+                print(f"Checkpoint saved to {checkpoint_path}")
+
     model.train()
     optimizer.zero_grad()
     loss_accum = 0.0
@@ -180,18 +208,18 @@ for step in range(total_steps):
         if ddp:
             model.require_backward_grad_sync = micro_step == grad_accum_steps - 1
         loss.backward()  # backpropagate and compute gradients
-        
+
     # average loss across all processes
     if ddp:
         dist.all_reduce(loss_accum, op=dist.ReduceOp.AVG)
-        
+
     # clip gradients to prevent extreme gradient magnitudes
     norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-    optimizer.step() # update model parameters
+    optimizer.step()  # update model parameters
     lr_scheduler.step()  # update learning rate
 
     torch.cuda.synchronize()  # wait for GPU to finish work
-    
+
     t1 = time.time()
 
     tokens_processed = (
@@ -202,16 +230,18 @@ for step in range(total_steps):
     lr = lr_scheduler.get_last_lr()[0]  # current learning rate
     if master_process:
         total_tokens += tokens_processed
-        wandb.log({
-            "train/loss": loss_accum.item(),
-            "train/learning_rate": lr,
-            "train/step": step,
-            "train/perplexity": torch.exp(loss_accum).item(),
-            "perf/tokens_per_second": tokens_per_sec,
-            "perf/grad_norm": norm,
-            "perf/duration": dt,
-            "perf/total_tokens": total_tokens
-        })
+        wandb.log(
+            {
+                "train/loss": loss_accum.item(),
+                "train/learning_rate": lr,
+                "train/step": step,
+                "train/perplexity": torch.exp(torch.clamp(loss_accum, max=10)).item(),
+                "perf/tokens_per_second": tokens_per_sec,
+                "perf/grad_norm": norm,
+                "perf/duration": dt,
+                "perf/total_tokens": total_tokens,
+            }
+        )
         print(
             f"Step {step}: loss={loss_accum.item():.4f}, "
             f"lr={lr:.6f}, tokens/sec={tokens_per_sec:.2f}, "
@@ -223,4 +253,3 @@ if master_process:
 
 if ddp:
     destroy_process_group()  # clean up distributed process group
-
