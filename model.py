@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+from config import GPTConfig
 
 # Multi-head self-attention mechanism
 class MultiHeadSelfAttention(nn.Module):
@@ -50,8 +51,10 @@ class MultiHeadSelfAttention(nn.Module):
         
 # Multi-layer Perceptron (MLP) block
 class MLP(nn.Module):
-    def __init__(self, n_embd: int, n_hidden: int):
+    def __init__(self, n_embd: int):
         super().__init__()
+        
+        n_hidden = 4 * n_embd  # 4 times the embedding dimension
         
         self.fc1 = nn.Linear(n_embd, n_hidden)
         self.fc2 = nn.Linear(n_hidden, n_embd)
@@ -66,14 +69,14 @@ class MLP(nn.Module):
     
 # Transformer Block
 class Transformer(nn.Module):
-    def __init__(self, n_embd: int, n_head: int, n_hidden: int):
+    def __init__(self, n_embd: int, n_head: int):
         super().__init__()
         
         self.ln1 = nn.LayerNorm(n_embd)
         self.attn = MultiHeadSelfAttention(n_embd, n_head)
         self.dropout1 = nn.Dropout(0.1)
         self.ln2 = nn.LayerNorm(n_embd)
-        self.mlp = MLP(n_embd, n_hidden)
+        self.mlp = MLP(n_embd)
         self.dropout2 = nn.Dropout(0.1)
         
     def forward(self, x: torch.Tensor):
@@ -88,15 +91,20 @@ class Transformer(nn.Module):
     
 # GPT-style model
 class GPTModel(nn.Module):
-    def __init__(self, vocab_size: int, n_embd: int, n_head: int, n_hidden: int, n_layers: int):
+    def __init__(self, config: GPTConfig):
         super().__init__()
+        
+        vocab_size = config.vocab_size
+        n_embd = config.n_embd
+        n_head = config.n_head
+        n_layers = config.n_layer
         
         self.model = nn.ModuleDict(
             dict(
                 wte=nn.Embedding(vocab_size, n_embd),  # token embeddings
                 wpe=nn.Embedding(1024, n_embd),  # positional embeddings
                 dropout=nn.Dropout(0.1), # dropout layer
-                h=nn.ModuleList([Transformer(n_embd, n_head, n_hidden) for _ in range(n_layers)]),  # stack of transformer blocks
+                h=nn.ModuleList([Transformer(n_embd, n_head) for _ in range(n_layers)]),  # stack of transformer blocks
                 ln_f=nn.LayerNorm(n_embd),  # final layer normalization
                 lm_head=nn.Linear(n_embd, vocab_size, bias=False)  # output linear layer for language modeling
             )
@@ -130,8 +138,10 @@ class GPTModel(nn.Module):
         # compute logits
         logits = self.model.lm_head(x)  # (B, T, vocab_size)
         
+        # compute loss if targets are provided
         if targets is not None:
-            # compute loss if targets are provided
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1)) # logits reshaped to (B*T, vocab_size), targets reshaped to (B*T,)
+            # compute loss using cross-entropy
+            # logits reshaped to (B*T, vocab_size), targets reshaped to (B*T,)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1)) 
             
         return logits, loss
