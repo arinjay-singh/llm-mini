@@ -1,3 +1,6 @@
+from dataclasses import dataclass
+
+@dataclass
 class GPTConfig:
     block_size = 1024  # context size
     vocab_size = 50257  # vocabulary size

@@ -1,0 +1,10 @@
+# Core ML library with CUDA support
+torch
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# Other dependencies
+numpy
+datasets
+tiktoken
+tqdm
+wandb
