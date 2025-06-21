@@ -4,3 +4,6 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+#fineweb dataset
+edu_fineweb10B/

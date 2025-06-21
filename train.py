@@ -118,7 +118,7 @@ if master_process:
     wandb.init(
         project="gpt2-pretraining",
         config={
-            "model_size": "medium",
+            "model_size": "small",
             "total_steps": total_steps,
             "batch_size": total_batch_size,
             "micro_batch_size": B,
