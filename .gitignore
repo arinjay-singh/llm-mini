@@ -7,3 +7,9 @@ __pycache__/
 
 #fineweb dataset
 edu_fineweb10B/
+
+# models
+model_checkpoints/
+
+# wandb data
+wandb/

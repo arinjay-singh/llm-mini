@@ -5,6 +5,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 from config import GPTConfig
 import inspect
+import math
 
 # Multi-head self-attention mechanism
 class MultiHeadSelfAttention(nn.Module):
@@ -95,6 +96,8 @@ class GPTModel(nn.Module):
     def __init__(self, config: GPTConfig):
         super().__init__()
         
+        self.config = config
+        
         vocab_size = config.vocab_size
         n_embd = config.n_embd
         n_head = config.n_head
@@ -113,6 +116,26 @@ class GPTModel(nn.Module):
         
         # weight tying with embedding matrix and output projection layer
         self.model.lm_head.weight = self.model.wte.weight
+        
+        # Apply proper weight initialization
+        self.apply(self._init_weights)
+        
+        # Special scaled init for residual projections
+        for pn, p in self.named_parameters():
+            if pn.endswith('out.weight'):  # attention output projections
+                torch.nn.init.normal_(p, mean=0.0, std=0.02/math.sqrt(2 * n_layers))
+        
+    def _init_weights(self, module):
+        """Initialize weights following GPT-2 paper."""
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, nn.LayerNorm):
+            torch.nn.init.zeros_(module.bias)
+            torch.nn.init.ones_(module.weight)
         
     def forward(self, idx: torch.Tensor, targets: torch.Tensor = None):
         # idx are token indices, targets are optional labels for training
