@@ -157,7 +157,7 @@ class GPTModel(nn.Module):
             x = block(x)
             
         # apply final layer normalization
-        x = self.model.ln_f(x)  # (B, T, n_emb
+        x = self.model.ln_f(x)  # (B, T, n_embd)
         
         # compute logits
         logits = self.model.lm_head(x)  # (B, T, vocab_size)
